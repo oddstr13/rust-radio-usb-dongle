@@ -57,20 +57,28 @@ fn main() -> ! {
         // these three are equivalent
         // let msg: &[u8; 5] = &[72, 101, 108, 108, 111];
         // let msg: &[u8; 5] = &[b'H', b'e', b'l', b'l', b'o'];
-        let msg: &[u8; 5] = b"Hello";
+        let mut _msg = [b'H', b'e', b'l', b'l', b'o', b' ', b' '];
+        let msg: &mut[u8] = &mut _msg[..];
 
         log::info!(
             "sending: {}",
             str::from_utf8(msg).expect("msg is not valid UTF-8 data")
         );
 
-        packet.copy_from_slice(msg);
+        for n in 0..=9 {
 
-        radio.send(&mut packet);
+            msg[6] = n + 48;
+
+            packet.copy_from_slice(msg);
+            radio.send(&mut packet);
+        }
+
+        // Turn off TX for the love of the spectrum!
+        radio.energy_detection_scan(1);
     }
 
     log::info!("`dk::exit() called; exiting ...`");
-    
+
     // force any pending memory operation to complete before the BKPT instruction that follows
     atomic::compiler_fence(Ordering::SeqCst);
     loop {
