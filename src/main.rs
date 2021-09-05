@@ -57,14 +57,7 @@ fn main() -> ! {
         .build();
     
 
-    let mut radio = {
-        let mut radio = hal::ieee802154::Radio::init(periph.RADIO, clocks);
-
-        // set TX power to its maximum value
-        radio.set_txpower(ieee802154::TxPower::Pos8dBm);
-        log::debug!("Radio initialized and configured with TX power set to the maximum value");
-        radio
-    };
+    let mut radio = hal::ieee802154::Radio::init(periph.RADIO, clocks);
 
     // these are the default settings of the DK's radio
     // NOTE if you ran `change-channel` then you may need to update the channel here
@@ -89,48 +82,67 @@ fn main() -> ! {
         msg[6] = n + 48;
 
         packet.copy_from_slice(msg);
-        radio.send(&mut packet);
+        //radio.send(&mut packet);
     }
 
     // Turn off TX for the love of the spectrum!
     radio.energy_detection_scan(1);
 
-    log::info!("`dk::exit() called; exiting ...`");
+    let mut receiving = false;
 
-    // force any pending memory operation to complete before the BKPT instruction that follows
-    atomic::compiler_fence(Ordering::SeqCst);
     loop {
-
-        if !usb_dev.poll(&mut [&mut serial]) {
-            continue;
-        }
-
-        let mut buf = [0u8; 64];
-
-        match serial.read(&mut buf) {
-            Ok(count) if count > 0 => {
-                // Echo back in upper case
-                for c in buf[0..count].iter_mut() {
-                    if 0x61 <= *c && *c <= 0x7a {
-                        *c &= !0x20;
-                    }
-                    // Stop on receiving Q
-                    if c == &b'Q' {
-                        asm::bkpt()
-                    }
-                }
-
-                let mut write_offset = 0;
-                while write_offset < count {
-                    match serial.write(&buf[write_offset..count]) {
-                        Ok(len) if len > 0 => {
-                            write_offset += len;
-                        }
-                        _ => {}
-                    }
-                }
+        if !receiving {
+            radio.recv_async_start(&mut packet);
+            receiving = true;
+        } else if radio.recv_async_poll() {
+            let res = radio.recv_async_sync();
+            receiving = false;
+            match res {
+                Ok(_crc) => {
+                    serial.write(b"Received: ").unwrap();
+                    serial.write(str::from_utf8(&*packet).expect("Data not UTF-8").as_bytes()).unwrap();
+                    serial.write(b"\r\n").unwrap();
+                    packet.copy_from_slice(b"ACK");
+                    radio.send(&mut packet);
+                    radio.energy_detection_scan(1);
+                },
+                Err(_) => {
+                    serial.write(b"RX failed\r\n").unwrap();
+                },
             }
-            _ => {}
         }
+
+        if usb_dev.poll(&mut [&mut serial]) {
+            let mut buf = [0u8; 64];
+
+            match serial.read(&mut buf) {
+                Ok(count) if count > 0 => {
+                    // Echo back in upper case
+                    for c in buf[0..count].iter_mut() {
+                        if 0x61 <= *c && *c <= 0x7a {
+                            *c &= !0x20;
+                        }
+                        // Stop on receiving Q
+                        if c == &b'Q' {
+                            // force any pending memory operation to complete before the BKPT instruction that follows
+                            atomic::compiler_fence(Ordering::SeqCst);
+                            asm::bkpt()
+                        }
+                    }
+
+                    let mut write_offset = 0;
+                    while write_offset < count {
+                        match serial.write(&buf[write_offset..count]) {
+                            Ok(len) if len > 0 => {
+                                write_offset += len;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
     }
 }
