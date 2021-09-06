@@ -88,10 +88,6 @@ fn main() -> ! {
         .max_packet_size_0(64) // (makes control transfers 8x faster)
         .build();
 
-    //serial.write((str::from_utf8(&addr).unwrap_or("Decode error")).as_bytes()).unwrap();
-    //serial.write(b"\r\n").unwrap();
-    
-
     let mut radio = hal::ieee802154::Radio::init(periph.RADIO, clocks);
 
     // these are the default settings of the DK's radio
@@ -134,15 +130,15 @@ fn main() -> ! {
             receiving = false;
             match res {
                 Ok(_crc) => {
-                    serial.write(b"Received: ").unwrap();
-                    serial.write(str::from_utf8(&*packet).expect("Data not UTF-8").as_bytes()).unwrap();
-                    serial.write(b"\r\n").unwrap();
+                    serial.write(b"Received: ").ok();
+                    serial.write(str::from_utf8(&*packet).expect("Data not UTF-8").as_bytes()).ok();
+                    serial.write(b"\r\n").ok();
                     packet.copy_from_slice(b"ACK");
                     radio.send(&mut packet);
-                    radio.energy_detection_scan(1);
+                    radio.energy_detection_scan(1); // Stop idle TX
                 },
                 Err(_) => {
-                    serial.write(b"RX failed\r\n").unwrap();
+                    serial.write(b"RX failed\r\n").ok();
                 },
             }
         }
@@ -160,20 +156,21 @@ fn main() -> ! {
                         // Stop on receiving Q
                         match *c {
                             b'Q' => {
-                                serial.write(b"\r\nEXITING\r\n").unwrap();
+                                serial.write(b"\r\nEXITING\r\n").ok();
+                                serial.flush().ok();
                                 // force any pending memory operation to complete before the BKPT instruction that follows
                                 atomic::compiler_fence(Ordering::SeqCst);
                                 asm::bkpt()
                             }
                             b'I' => {
-                                serial.write(b"\r\nID: ").unwrap();
-                                serial.write(&id).unwrap();
-                                serial.write(b"\r\n").unwrap();
+                                serial.write(b"\r\nID: ").ok();
+                                serial.write(&id).ok();
+                                serial.write(b"\r\n").ok();
                             }
                             b'A' => {
-                                serial.write(b"\r\nADDR: ").unwrap();
-                                serial.write(&addr).unwrap();
-                                serial.write(b"\r\n").unwrap();
+                                serial.write(b"\r\nADDR: ").ok();
+                                serial.write(&addr).ok();
+                                serial.write(b"\r\n").ok();
                             }
                             _ => ()
                         }
