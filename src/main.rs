@@ -10,7 +10,6 @@ use core::sync::atomic::{self, Ordering};
 use cortex_m_rt::entry;
 use hal::clocks::{self, Clocks};
 use hal::ieee802154::{self, Channel, Packet, TxPower};
-use hal::pac::ficr;
 
 use core::panic::PanicInfo;
 use cortex_m::asm;
@@ -27,7 +26,35 @@ fn panic(info: &PanicInfo) -> ! {
     // abort instruction: triggers a HardFault exception which causes probe-run to exit
     asm::udf()
 }
+static  HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
+const HEX_SIZE: usize = 24;
 
+fn hexify(mut n: u64) -> [u8; HEX_SIZE] {
+    let mut i = 0;
+    let mut res: [u8; HEX_SIZE] = [b'\0'; HEX_SIZE];
+
+    while n > 0 {
+        if i != 0 {
+            res[HEX_SIZE-i-1] = b':';
+            i+=1;
+        }
+        let cur = n & 0xff;
+
+        res[HEX_SIZE-i-1] = HEX_CHARS[(cur&0xf) as usize];
+        i += 1;
+
+        res[HEX_SIZE-i-1] = HEX_CHARS[(cur>>4) as usize];
+        i += 1;
+
+
+        n >>= 8;
+    }
+    //res.reverse();
+    res.copy_within(HEX_SIZE-i..HEX_SIZE, 0);
+    res[i..HEX_SIZE].fill(b'\0');
+    res
+}
+// D2:03:49:77:39:0A
 #[entry]
 fn main() -> ! {
     static mut CLOCKS: Option<
@@ -47,14 +74,22 @@ fn main() -> ! {
     let usb_bus = Usbd::new(UsbPeripheral::new(periph.USBD, &clocks));
     let mut serial = SerialPort::new(&usb_bus);
 
+    let _id = (periph.FICR.deviceid[0].read().bits() as u64) | (periph.FICR.deviceid[1].read().bits() as u64) << 32;
+    let id = hexify(_id);
+
+    let _addr = (periph.FICR.deviceaddr[0].read().bits() as u64) | ((periph.FICR.deviceaddr[1].read().bits() & 0xffff) as u64) << 32;
+    let addr = hexify(_addr);
 
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
         .manufacturer("https://OpenShell.no")
         .product("radio-usb-dongle")
-        .serial_number("TEST") // TODO: Use device ID
+        .serial_number(str::from_utf8(&addr).unwrap_or(""))
         .device_class(USB_CLASS_CDC)
         .max_packet_size_0(64) // (makes control transfers 8x faster)
         .build();
+
+    //serial.write((str::from_utf8(&addr).unwrap_or("Decode error")).as_bytes()).unwrap();
+    //serial.write(b"\r\n").unwrap();
     
 
     let mut radio = hal::ieee802154::Radio::init(periph.RADIO, clocks);
@@ -123,10 +158,24 @@ fn main() -> ! {
                             *c &= !0x20;
                         }
                         // Stop on receiving Q
-                        if c == &b'Q' {
-                            // force any pending memory operation to complete before the BKPT instruction that follows
-                            atomic::compiler_fence(Ordering::SeqCst);
-                            asm::bkpt()
+                        match *c {
+                            b'Q' => {
+                                serial.write(b"\r\nEXITING\r\n").unwrap();
+                                // force any pending memory operation to complete before the BKPT instruction that follows
+                                atomic::compiler_fence(Ordering::SeqCst);
+                                asm::bkpt()
+                            }
+                            b'I' => {
+                                serial.write(b"\r\nID: ").unwrap();
+                                serial.write(&id).unwrap();
+                                serial.write(b"\r\n").unwrap();
+                            }
+                            b'A' => {
+                                serial.write(b"\r\nADDR: ").unwrap();
+                                serial.write(&addr).unwrap();
+                                serial.write(b"\r\n").unwrap();
+                            }
+                            _ => ()
                         }
                     }
 
