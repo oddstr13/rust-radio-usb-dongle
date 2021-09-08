@@ -81,14 +81,14 @@ fn main() -> ! {
     let addr = hexify(_addr);
 
     let mut usb_dev = UsbDeviceBuilder::new(&usb_bus, UsbVidPid(0x16c0, 0x27dd))
-        .manufacturer("https://OpenShell.no")
+        .manufacturer("OpenShell.no")
         .product("radio-usb-dongle")
         .serial_number(str::from_utf8(&addr).unwrap_or(""))
         .device_class(USB_CLASS_CDC)
         .max_packet_size_0(64) // (makes control transfers 8x faster)
         .build();
 
-    let mut radio = hal::ieee802154::Radio::init(periph.RADIO, clocks);
+    let mut radio = hal::ieee802154::Radio::init(periph.RADIO, &clocks);
 
     // these are the default settings of the DK's radio
     // NOTE if you ran `change-channel` then you may need to update the channel here
@@ -113,11 +113,12 @@ fn main() -> ! {
         msg[6] = n + 48;
 
         packet.copy_from_slice(msg);
-        //radio.send(&mut packet);
+        radio.send(&mut packet);
     }
 
     // Turn off TX for the love of the spectrum!
-    radio.energy_detection_scan(1);
+    //radio.energy_detection_scan(1);
+
 
     let mut receiving = false;
 
@@ -133,11 +134,8 @@ fn main() -> ! {
                     serial.write(b"Received: ").ok();
                     serial.write(str::from_utf8(&*packet).expect("Data not UTF-8").as_bytes()).ok();
                     serial.write(b"\r\n").ok();
-                    packet.copy_from_slice(b"ACK");
-                    radio.send(&mut packet);
-                    radio.energy_detection_scan(1); // Stop idle TX
                 },
-                Err(_) => {
+                Err(_crc) => {
                     serial.write(b"RX failed\r\n").ok();
                 },
             }
@@ -171,6 +169,15 @@ fn main() -> ! {
                                 serial.write(b"\r\nADDR: ").ok();
                                 serial.write(&addr).ok();
                                 serial.write(b"\r\n").ok();
+                            }
+                            b'T' => {
+                                if receiving {
+                                    radio.cancel_recv();
+                                    receiving = false;
+                                }
+                                packet.copy_from_slice(b"Hello, World!");
+                                radio.send(&mut packet);
+                                //radio.energy_detection_scan(1); // Stop idle TX
                             }
                             _ => ()
                         }
